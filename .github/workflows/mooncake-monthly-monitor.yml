@@ -11,6 +11,7 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
 
 jobs:
   monitor:
@@ -23,6 +24,9 @@ jobs:
         with:
           python-version: '3.x'
       - name: Generate Mooncake monthly report
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: ${{ vars.OPENAI_MODEL || 'gpt-4.1-mini' }}
         run: |
           END_DATE="${{ github.event.inputs.end_date }}"
           if [ -z "$END_DATE" ]; then END_DATE="$(date -u +%Y-%m)-25"; fi
@@ -31,19 +35,30 @@ import datetime as dt, sys
 end=dt.date.fromisoformat(sys.argv[1]); m=end.month-1 or 12; y=end.year-(1 if end.month==1 else 0); print(dt.date(y,m,25))
 PY
 )"
+          echo "END_DATE=$END_DATE" >> "$GITHUB_ENV"
+          echo "START_DATE=$START_DATE" >> "$GITHUB_ENV"
           python .codex/skills/mooncake-monthly-monitor/scripts/monitor_mooncake.py \
             --end-date "$END_DATE" \
             --output "reports/mooncake/mooncake-main-${START_DATE}-to-${END_DATE}.md"
-      - name: Commit report
+      - name: Commit report and open PR
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          BRANCH="chore/mooncake-monthly-report-${END_DATE}-${GITHUB_RUN_ID}"
+          git switch -c "$BRANCH"
           git add reports/mooncake
           if git diff --cached --quiet; then
             echo "No report changes to commit."
           else
             git commit -m "chore: add Mooncake monthly monitor report"
-            git push origin main
+            git push --set-upstream origin "$BRANCH"
+            gh pr create \
+              --base main \
+              --head "$BRANCH" \
+              --title "chore: add Mooncake monthly monitor report" \
+              --body "Generated Mooncake monthly monitoring report for ${START_DATE} to ${END_DATE}."
           fi
       - name: Send email notification
         if: ${{ env.SMTP_HOST != '' && env.SMTP_USERNAME != '' && env.SMTP_PASSWORD != '' }}
@@ -60,4 +75,4 @@ PY
           subject: Mooncake monthly monitor finished
           to: 836160610@qq.com
           from: ${{ secrets.SMTP_FROM || secrets.SMTP_USERNAME }}
-          body: Mooncake main-branch monthly monitoring report has been generated and pushed to main.
+          body: Mooncake main-branch monthly monitoring report has been generated and proposed as a pull request.
